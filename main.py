@@ -11,17 +11,22 @@ from telegram.ext import (
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-# Basit bellek içi sayaç (şimdilik yeterli)
-# Yapı: { user_id: {"date": YYYY-MM-DD, "count": int} }
 USER_LIMITS = {}
 DAILY_LIMIT = 3
+
+# Test modu piyasa ortalaması
+MARKET_AVERAGE = 600_000
+OPPORTUNITY_THRESHOLD = 15  # %
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Merhaba 👋\n"
         "Araç İlan Analiz Botu aktif.\n\n"
-        "🆓 Ücretsiz kullanım: Günde 3 ilan analizi\n"
-        "Lütfen bir sahibinden.com ilan linki gönder."
+        "🆓 Ücretsiz kullanım: Günde 3 ilan\n"
+        "📊 Fırsat kuralı: %15 ve üzeri\n\n"
+        "Lütfen ilan linki + fiyat gönder:\n"
+        "Örnek:\n"
+        "https://www.sahibinden.com/ilan/... 510000"
     )
 
 def can_analyze(user_id: int) -> bool:
@@ -29,7 +34,6 @@ def can_analyze(user_id: int) -> bool:
     record = USER_LIMITS.get(user_id)
 
     if record is None or record["date"] != today:
-        # Yeni gün veya ilk kullanım
         USER_LIMITS[user_id] = {"date": today, "count": 0}
         return True
 
@@ -38,18 +42,23 @@ def can_analyze(user_id: int) -> bool:
 def increase_count(user_id: int):
     USER_LIMITS[user_id]["count"] += 1
 
+def extract_price(text: str):
+    parts = text.split()
+    for part in parts:
+        if part.isdigit():
+            return int(part)
+    return None
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     user_id = update.effective_user.id
 
-    # Sadece ilan linki kabul
     if "sahibinden.com/ilan" not in text:
         await update.message.reply_text(
             "❌ Lütfen sadece sahibinden.com ilan linki gönderiniz."
         )
         return
 
-    # Limit kontrolü
     if not can_analyze(user_id):
         await update.message.reply_text(
             "⛔ Günlük ücretsiz analiz hakkın doldu.\n\n"
@@ -59,14 +68,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Sayaç artır
+    price = extract_price(text)
+    if price is None:
+        await update.message.reply_text(
+            "⚠️ Test modu için fiyatı da yazmalısın.\n"
+            "Örnek:\n"
+            "https://www.sahibinden.com/ilan/... 510000"
+        )
+        return
+
     increase_count(user_id)
 
-    # Şimdilik sahte analiz cevabı (bir sonraki adımda gerçek analiz gelecek)
+    diff_percent = (MARKET_AVERAGE - price) / MARKET_AVERAGE * 100
     remaining = DAILY_LIMIT - USER_LIMITS[user_id]["count"]
+
+    if diff_percent >= OPPORTUNITY_THRESHOLD:
+        result = "✅ FIRSAT İLAN"
+    else:
+        result = "❌ FIRSAT DEĞİL"
+
     await update.message.reply_text(
-        "✅ Link alındı.\n"
-        "Analiz tamamlandı (test modu).\n\n"
+        f"📊 Analiz Sonucu\n\n"
+        f"💰 İlan Fiyatı: {price:,} TL\n"
+        f"📈 Piyasa Ort.: {MARKET_AVERAGE:,} TL\n"
+        f"📉 Fark: %{diff_percent:.1f}\n\n"
+        f"{result}\n\n"
         f"🧮 Kalan ücretsiz analiz: {remaining}"
     )
 
