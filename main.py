@@ -11,9 +11,14 @@ from telegram.ext import (
     filters,
 )
 
+# ================== CONFIG ==================
+
 TOKEN = os.getenv("BOT_TOKEN")
 
-# ---------------- DATABASE ----------------
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN ortam değişkeni tanımlı değil")
+
+# ================== DATABASE ==================
 
 conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -34,16 +39,16 @@ CREATE TABLE IF NOT EXISTS listings (
 """)
 conn.commit()
 
-# ---------------- USER STATES ----------------
+# ================== STATE ==================
 
 USER_STATE = {}   # user_id -> state
-USER_TEMP = {}    # geçici veri
+USER_TEMP = {}    # user_id -> geçici veri
 
-# ---------------- HELPERS ----------------
+# ================== HELPERS ==================
 
 def extract_listing_id(url: str):
-    m = re.search(r"-([0-9]{6,})", url)
-    return m.group(1) if m else None
+    match = re.search(r"-([0-9]{6,})", url)
+    return match.group(1) if match else None
 
 def parse_basic_from_url(url: str):
     parts = url.split("-")
@@ -56,7 +61,7 @@ def parse_basic_from_url(url: str):
             break
     return marka, model, yil
 
-# ---------------- BOT HANDLERS ----------------
+# ================== BOT HANDLERS ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -73,7 +78,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = USER_STATE.get(user_id, "idle")
 
-    # --- LINK GELDİ ---
+    # -------- LINK --------
     if state == "idle" and text.startswith("http"):
         listing_id = extract_listing_id(text)
         marka, model, yil = parse_basic_from_url(text)
@@ -90,17 +95,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             "🔗 İlan alındı.\n\n"
-            "Bu ilanı kaydetmek için lütfen\n"
-            "📌 Fiyatı (TL) yaz:"
+            "📌 Lütfen fiyatı (TL) yaz:"
         )
         return
 
-    # --- FİYAT ---
+    # -------- FİYAT --------
     if state == "await_price":
         if not text.isdigit():
-            await update.message.reply_text(
-                "❌ Lütfen sadece rakam gir.\nÖrnek: 645000"
-            )
+            await update.message.reply_text("❌ Sadece rakam gir. Örnek: 645000")
             return
 
         USER_TEMP[user_id]["fiyat"] = int(text)
@@ -109,12 +111,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📌 Km bilgisini yaz:")
         return
 
-    # --- KM ---
+    # -------- KM --------
     if state == "await_km":
         if not text.isdigit():
-            await update.message.reply_text(
-                "❌ Lütfen sadece rakam gir.\nÖrnek: 72000"
-            )
+            await update.message.reply_text("❌ Sadece rakam gir. Örnek: 72000")
             return
 
         USER_TEMP[user_id]["km"] = int(text)
@@ -122,14 +122,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             "📌 Hasar durumu?\n"
-            "(Boyasız / Değişen var / Bilmiyorum)"
+            "Boyasız / Değişen var / Bilmiyorum"
         )
         return
 
-    # --- HASAR ---
+    # -------- HASAR --------
     if state == "await_damage":
         USER_TEMP[user_id]["hasar"] = text
-
         data = USER_TEMP[user_id]
 
         cursor.execute("""
@@ -138,14 +137,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             km, fiyat, hasar, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            data.get("source"),
-            data.get("listing_id"),
-            data.get("marka"),
-            data.get("model"),
-            data.get("yil"),
-            data.get("km"),
-            data.get("fiyat"),
-            data.get("hasar"),
+            data["source"],
+            data["listing_id"],
+            data["marka"],
+            data["model"],
+            data["yil"],
+            data["km"],
+            data["fiyat"],
+            data["hasar"],
             datetime.now().isoformat()
         ))
         conn.commit()
@@ -155,23 +154,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             "✅ İlan veritabanına kaydedildi.\n\n"
-            "Bu araç için yeterli veri oluştuğunda\n"
-            "piyasa analizi yapılacaktır."
+            "Yeterli veri oluştuğunda piyasa analizi yapılacaktır."
         )
         return
 
-    # --- DİĞER MESAJLAR ---
+    # -------- DİĞER --------
     await update.message.reply_text(
-        "ℹ️ Lütfen analiz etmek istediğin\n"
-        "ilanın linkini gönder."
+        "ℹ️ Lütfen analiz etmek istediğin ilan linkini gönder."
     )
 
-# ---------------- MAIN ----------------
+# ================== MAIN ==================
 
 def main():
-    if not TOKEN:
-        raise RuntimeError("BOT_TOKEN ortam değişkeni tanımlı değil")
-
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", s_
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
