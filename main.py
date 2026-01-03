@@ -1,41 +1,34 @@
-import re
-import json
+import os
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-def get_listing_data(url: str):
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        html = r.text
-        soup = BeautifulSoup(html, "html.parser")
+TOKEN = os.getenv("BOT_TOKEN")
 
-        # 1️⃣ Başlık
-        title = "İlan"
-        h1 = soup.find("h1")
-        if h1:
-            title = h1.get_text(strip=True)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "✅ Bot çalışıyor.\n"
+        "Bu bir test mesajıdır."
+    )
 
-        # 2️⃣ Fiyat – yöntem 1
-        price = None
-        price_tag = soup.find("span", class_=re.compile("classified-price"))
-        if price_tag:
-            price_text = price_tag.get_text()
-            price = int(re.sub(r"[^\d]", "", price_text))
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📩 Mesaj alındı."
+    )
 
-        # 3️⃣ Fiyat – yöntem 2 (data-price)
-        if price is None:
-            data_price = soup.find(attrs={"data-price": True})
-            if data_price:
-                price = int(data_price["data-price"])
+def main():
+    if not TOKEN:
+        raise RuntimeError("BOT_TOKEN bulunamadı")
 
-        # 4️⃣ Fiyat – yöntem 3 (JSON içinden)
-        if price is None:
-            match = re.search(r'"price"\s*:\s*(\d+)', html)
-            if match:
-                price = int(match.group(1))
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.run_polling()
 
-        if price is None:
-            return None, None
-
-        return title, price
-
-    except Exception:
-        return None, None
+if __name__ == "__main__":
+    main()
