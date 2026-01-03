@@ -1,5 +1,9 @@
 import os
+import time
+import requests
 from datetime import date
+from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -8,21 +12,20 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import time
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
 
 TOKEN = os.getenv("BOT_TOKEN")
 
 DAILY_LIMIT = 3
 USER_LIMITS = {}
+
 CACHE = {}
 CACHE_TTL = 1800  # 30 dakika
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
+
+# ---------------- CACHE & MARKET ----------------
 
 def cache_get(key):
     item = CACHE.get(key)
@@ -79,6 +82,8 @@ def fetch_market_average(brand, model, year):
     cache_set(key, avg)
     return avg
 
+# ---------------- USER LIMIT ----------------
+
 def get_user_record(user_id: int):
     today = date.today().isoformat()
     record = USER_LIMITS.get(user_id)
@@ -87,6 +92,8 @@ def get_user_record(user_id: int):
         USER_LIMITS[user_id] = {"date": today, "count": 0}
 
     return USER_LIMITS[user_id]
+
+# ---------------- BOT HANDLERS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -109,12 +116,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     record["count"] += 1
     kalan = DAILY_LIMIT - record["count"]
 
-# Piyasa ortalaması testi (MVP)
-title = update.message.text or ""
-brand, model, year = parse_basic_info_from_title(title)
-market_avg = fetch_market_average(brand, model, year)
+    title = update.message.text or ""
+    brand, model, year = parse_basic_info_from_title(title)
+    market_avg = fetch_market_average(brand, model, year)
 
-    # TEST AMAÇLI SABİT KARAR
     decision = (
         "🔥 AL-SAT İÇİN UYGUN\n\n"
         "Bu ilan piyasa ortalamasının belirgin şekilde altında.\n"
@@ -137,72 +142,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-import time
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
-
-CACHE = {}
-CACHE_TTL = 1800  # 30 dk
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-}
-
-def cache_get(key):
-    item = CACHE.get(key)
-    if not item:
-        return None
-    value, ts = item
-    if time.time() - ts > CACHE_TTL:
-        del CACHE[key]
-        return None
-    return value
-
-def cache_set(key, value):
-    CACHE[key] = (value, time.time())
-
-def parse_basic_info_from_title(title: str):
-    # Çok basit ilk MVP: "Fiat Egea 1.4 Fire 2019" gibi başlıklardan
-    words = title.split()
-    brand = words[0] if len(words) > 0 else ""
-    model = words[1] if len(words) > 1 else ""
-    year = ""
-    for w in words:
-        if w.isdigit() and len(w) == 4:
-            year = w
-            break
-    return brand, model, year
-
-def fetch_market_average(brand, model, year):
-    key = f"{brand}-{model}-{year}"
-    cached = cache_get(key)
-    if cached:
-        return cached
-
-    query = f"site:sahibinden.com {brand} {model} {year}"
-    url = f"https://www.google.com/search?q={quote_plus(query)}"
-
-    r = requests.get(url, headers=HEADERS, timeout=10)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    prices = []
-    for span in soup.find_all("span"):
-        txt = span.get_text()
-        if "TL" in txt or "₺" in txt:
-            digits = "".join(c for c in txt if c.isdigit())
-            if digits.isdigit():
-                p = int(digits)
-                if 50_000 < p < 5_000_000:
-                    prices.append(p)
-
-        if len(prices) >= 10:
-            break
-
-    if not prices:
-        return None
-
-    avg = sum(prices) // len(prices)
-    cache_set(key, avg)
-    return avg
