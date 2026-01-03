@@ -67,3 +67,71 @@ def main():
 
 if __name__ == "__main__":
     main()
+import time
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
+
+CACHE = {}
+CACHE_TTL = 1800  # 30 dk
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}
+
+def cache_get(key):
+    item = CACHE.get(key)
+    if not item:
+        return None
+    value, ts = item
+    if time.time() - ts > CACHE_TTL:
+        del CACHE[key]
+        return None
+    return value
+
+def cache_set(key, value):
+    CACHE[key] = (value, time.time())
+
+def parse_basic_info_from_title(title: str):
+    # Çok basit ilk MVP: "Fiat Egea 1.4 Fire 2019" gibi başlıklardan
+    words = title.split()
+    brand = words[0] if len(words) > 0 else ""
+    model = words[1] if len(words) > 1 else ""
+    year = ""
+    for w in words:
+        if w.isdigit() and len(w) == 4:
+            year = w
+            break
+    return brand, model, year
+
+def fetch_market_average(brand, model, year):
+    key = f"{brand}-{model}-{year}"
+    cached = cache_get(key)
+    if cached:
+        return cached
+
+    query = f"site:sahibinden.com {brand} {model} {year}"
+    url = f"https://www.google.com/search?q={quote_plus(query)}"
+
+    r = requests.get(url, headers=HEADERS, timeout=10)
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    prices = []
+    for span in soup.find_all("span"):
+        txt = span.get_text()
+        if "TL" in txt or "₺" in txt:
+            digits = "".join(c for c in txt if c.isdigit())
+            if digits.isdigit():
+                p = int(digits)
+                if 50_000 < p < 5_000_000:
+                    prices.append(p)
+
+        if len(prices) >= 10:
+            break
+
+    if not prices:
+        return None
+
+    avg = sum(prices) // len(prices)
+    cache_set(key, avg)
+    return avg
