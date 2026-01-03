@@ -1,4 +1,6 @@
 import os
+import requests
+from bs4 import BeautifulSoup
 from datetime import date
 from telegram import Update
 from telegram.ext import (
@@ -14,9 +16,12 @@ TOKEN = os.getenv("BOT_TOKEN")
 USER_LIMITS = {}
 DAILY_LIMIT = 3
 
-# Test modu piyasa ortalaması
 MARKET_AVERAGE = 600_000
 OPPORTUNITY_THRESHOLD = 15  # %
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -24,9 +29,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Araç İlan Analiz Botu aktif.\n\n"
         "🆓 Ücretsiz kullanım: Günde 3 ilan\n"
         "📊 Fırsat kuralı: %15 ve üzeri\n\n"
-        "Lütfen ilan linki + fiyat gönder:\n"
-        "Örnek:\n"
-        "https://www.sahibinden.com/ilan/... 510000"
+        "Lütfen sadece sahibinden ilan linki gönder."
     )
 
 def can_analyze(user_id: int) -> bool:
@@ -42,12 +45,32 @@ def can_analyze(user_id: int) -> bool:
 def increase_count(user_id: int):
     USER_LIMITS[user_id]["count"] += 1
 
-def extract_price(text: str):
-    parts = text.split()
-    for part in parts:
-        if part.isdigit():
-            return int(part)
-    return None
+def get_listing_data(url: str):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # Başlık
+        title_tag = soup.find("h1")
+        title = title_tag.get_text(strip=True) if title_tag else "İlan"
+
+        # Fiyat
+        price_tag = soup.find("span", {"class": "classified-price"})
+        if not price_tag:
+            return None, None
+
+        price_text = price_tag.get_text()
+        price = int(
+            price_text.replace(".", "")
+            .replace("TL", "")
+            .replace("₺", "")
+            .strip()
+        )
+
+        return title, price
+
+    except Exception:
+        return None, None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
@@ -68,12 +91,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    price = extract_price(text)
+    title, price = get_listing_data(text)
+
     if price is None:
         await update.message.reply_text(
-            "⚠️ Test modu için fiyatı da yazmalısın.\n"
-            "Örnek:\n"
-            "https://www.sahibinden.com/ilan/... 510000"
+            "⚠️ İlan bilgileri okunamadı.\n"
+            "Lütfen farklı bir ilan deneyin."
         )
         return
 
@@ -88,7 +111,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = "❌ FIRSAT DEĞİL"
 
     await update.message.reply_text(
-        f"📊 Analiz Sonucu\n\n"
+        f"🚗 {title}\n\n"
         f"💰 İlan Fiyatı: {price:,} TL\n"
         f"📈 Piyasa Ort.: {MARKET_AVERAGE:,} TL\n"
         f"📉 Fark: %{diff_percent:.1f}\n\n"
@@ -107,3 +130,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
