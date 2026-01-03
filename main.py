@@ -52,6 +52,9 @@ def parse_basic_info_from_title(title: str):
     return brand, model, year
 
 def fetch_market_average(brand, model, year):
+    if not brand or not model or not year:
+        return None
+
     key = f"{brand}-{model}-{year}"
     cached = cache_get(key)
     if cached:
@@ -82,6 +85,17 @@ def fetch_market_average(brand, model, year):
     cache_set(key, avg)
     return avg
 
+# ---------------- PRICE ----------------
+
+def extract_price_from_text(text: str):
+    digits = "".join(c for c in text if c.isdigit())
+    if not digits:
+        return None
+    price = int(digits)
+    if price < 50_000 or price > 10_000_000:
+        return None
+    return price
+
 # ---------------- USER LIMIT ----------------
 
 def get_user_record(user_id: int):
@@ -99,7 +113,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Araç Analiz Botu aktif.\n\n"
         "🆓 Günlük ücretsiz hak: 3 analiz\n"
-        "Mesaj göndererek test edebilirsin."
+        "Kullanım örneği:\n"
+        "Fiat Egea 2019 645000"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,38 +122,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     record = get_user_record(user_id)
 
     if record["count"] >= DAILY_LIMIT:
-        await update.message.reply_text(
-            "⛔ Günlük ücretsiz analiz hakkın doldu.\n"
-            "Daha fazlası için üyelik gerekir."
-        )
-        return
-
-    record["count"] += 1
-    kalan = DAILY_LIMIT - record["count"]
-
-    title = update.message.text or ""
-    brand, model, year = parse_basic_info_from_title(title)
-    market_avg = fetch_market_average(brand, model, year)
-
-    decision = (
-        "🔥 AL-SAT İÇİN UYGUN\n\n"
-        "Bu ilan piyasa ortalamasının belirgin şekilde altında.\n"
-        "Hızlı alım-satım için uygun, marj yüksek."
-    )
-
-    await update.message.reply_text(
-        f"{decision}\n\n"
-        f"🧮 Kalan ücretsiz hak: {kalan}"
-    )
-
-def main():
-    if not TOKEN:
-        raise RuntimeError("BOT_TOKEN bulunamadı")
-
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+        await update.message.rep
