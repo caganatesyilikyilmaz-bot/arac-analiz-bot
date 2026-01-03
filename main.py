@@ -18,27 +18,11 @@ TOKEN = os.getenv("BOT_TOKEN")
 DAILY_LIMIT = 3
 USER_LIMITS = {}
 
-CACHE = {}
-CACHE_TTL = 1800  # 30 dakika
-
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    "User-Agent": "Mozilla/5.0"
 }
 
-# ---------------- CACHE & MARKET ----------------
-
-def cache_get(key):
-    item = CACHE.get(key)
-    if not item:
-        return None
-    value, ts = item
-    if time.time() - ts > CACHE_TTL:
-        del CACHE[key]
-        return None
-    return value
-
-def cache_set(key, value):
-    CACHE[key] = (value, time.time())
+# ---------------- SAFE MARKET ----------------
 
 def parse_basic_info_from_title(title: str):
     words = title.split()
@@ -51,41 +35,32 @@ def parse_basic_info_from_title(title: str):
             break
     return brand, model, year
 
-def fetch_market_average(brand, model, year):
-    if not brand or not model or not year:
-        return None
+def fetch_market_average_safe(brand, model, year):
+    try:
+        query = f"site:sahibinden.com {brand} {model} {year}"
+        url = f"https://www.google.com/search?q={quote_plus(query)}"
 
-    key = f"{brand}-{model}-{year}"
-    cached = cache_get(key)
-    if cached:
-        return cached
+        r = requests.get(url, headers=HEADERS, timeout=5)
+        soup = BeautifulSoup(r.text, "html.parser")
 
-    query = f"site:sahibinden.com {brand} {model} {year}"
-    url = f"https://www.google.com/search?q={quote_plus(query)}"
-
-    r = requests.get(url, headers=HEADERS, timeout=10)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    prices = []
-    for span in soup.find_all("span"):
-        txt = span.get_text()
-        if "TL" in txt or "₺" in txt:
+        prices = []
+        for span in soup.find_all("span"):
+            txt = span.get_text()
             digits = "".join(c for c in txt if c.isdigit())
             if digits.isdigit():
                 p = int(digits)
                 if 50_000 < p < 5_000_000:
                     prices.append(p)
-        if len(prices) >= 10:
-            break
+            if len(prices) >= 5:
+                break
 
-    if not prices:
+        if not prices:
+            return None
+
+        return sum(prices) // len(prices)
+
+    except Exception:
         return None
-
-    avg = sum(prices) // len(prices)
-    cache_set(key, avg)
-    return avg
-
-# ---------------- PRICE ----------------
 
 def extract_price_from_text(text: str):
     digits = "".join(c for c in text if c.isdigit())
@@ -107,13 +82,12 @@ def get_user_record(user_id: int):
 
     return USER_LIMITS[user_id]
 
-# ---------------- BOT HANDLERS ----------------
+# ---------------- BOT ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Araç Analiz Botu aktif.\n\n"
-        "🆓 Günlük ücretsiz hak: 3 analiz\n"
-        "Kullanım örneği:\n"
+        "🤖 Araç Analiz Botu aktif\n\n"
+        "Örnek kullanım:\n"
         "Fiat Egea 2019 645000"
     )
 
@@ -122,4 +96,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     record = get_user_record(user_id)
 
     if record["count"] >= DAILY_LIMIT:
-        await update.message.rep
+        await update.message.reply_text(
+            "⛔ Günlük ücretsiz analiz hakkın doldu."
+        )
+        return
+
+    record["count"] += 1
+    kalan = DAILY_LIMIT - record["count"]
+
+    text = update.message.text or ""
+    brand, model, year = parse_basic_info_from_title(text)
+    price = extract_price_from_text(text)
+    market_avg = fetch_market_average_safe(brand, model, year)
+
+    if market_avg and price:
+        diff = ((market_avg - price) / market_avg) * 100
+    else:
+        diff = 0
+
+    if diff >= 15:
+        decision = "🔥 AL-SAT İÇİN UYGUN"
+    elif diff >= 8:
+        decision = "⚠️ PAZARLIKLA DEĞERLENDİRİLEBİLİR"
+    else:
+        decision = "❌ UZAK DUR / BEKLE"
+
+    await update.message.reply_text(
+        f"{decision}\n"
+        f"Fark: %{diff:.1f}\n\n"
+        f"🧮 Kalan hak: {kalan}"
+    )
+
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
