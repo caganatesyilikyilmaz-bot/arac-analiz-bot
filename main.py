@@ -75,7 +75,8 @@ def trimmed_mean(values, ratio=0.1):
         return sum(values) / len(values)
     values = sorted(values)
     k = int(len(values) * ratio)
-    return sum(values[k:-k]) / len(values[k:-k])
+    sliced = values[k:-k] if k > 0 else values
+    return sum(sliced) / len(sliced)
 
 def standard_deviation(values):
     avg = sum(values) / len(values)
@@ -84,8 +85,10 @@ def standard_deviation(values):
 def advanced_market_analysis(data):
     km_min = int(data["km"] * 0.75)
     km_max = int(data["km"] * 1.25)
-    yil_min = data["yil"] - 1 if data["yil"] else 0
-    yil_max = data["yil"] + 1 if data["yil"] else 9999
+
+    yil = data["yil"] if isinstance(data["yil"], int) else None
+    yil_min = yil - 1 if yil else 0
+    yil_max = yil + 1 if yil else 9999
 
     cursor.execute("""
     SELECT fiyat FROM listings
@@ -123,10 +126,13 @@ def advanced_market_analysis(data):
         0.2 * (sum(filtered) / len(filtered))
     )
 
-    diff = ((ref - data["fiyat"]) / ref) * 100
-    std_ratio = (std / ref) * 100
+    if ref <= 0:
+        return None
 
-    confidence = max(40, min(95, int(50 + len(filtered)*2 - std_ratio)))
+    diff = ((ref - data["fiyat"]) / ref) * 100
+    std_ratio = (std / ref) * 100 if ref > 0 else 0
+
+    confidence = int(max(40, min(95, 50 + len(filtered)*2 - std_ratio)))
 
     return {
         "count": len(filtered),
@@ -205,13 +211,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             km, fiyat, hasar, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            data["source"], data["listing_id"], data["marka"], data["model"],
-            data["yil"], data["km"], data["fiyat"], data["hasar"],
+            data["source"],
+            data["listing_id"],
+            data["marka"],
+            data["model"],
+            data["yil"],
+            data["km"],
+            data["fiyat"],
+            data["hasar"],
             datetime.now().isoformat()
         ))
         conn.commit()
 
-        analysis = advanced_market_analysis(data)
+        try:
+            analysis = advanced_market_analysis(data)
+        except Exception:
+            analysis = None
 
         USER_STATE[user_id] = "idle"
         USER_TEMP.pop(user_id, None)
@@ -219,7 +234,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not analysis:
             await update.message.reply_text(
                 "✅ Kaydedildi.\n"
-                "🔍 Analiz için yeterli benzer ilan yok."
+                "🔍 Analiz için yeterli ve sağlıklı veri yok."
             )
             return
 
