@@ -16,7 +16,6 @@ from telegram.ext import (
 # ================== CONFIG ==================
 
 TOKEN = os.getenv("BOT_TOKEN")
-
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN ortam değişkeni tanımlı değil")
 
@@ -29,7 +28,7 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS listings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT,
-    listing_id TEXT,
+    listing_id TEXT UNIQUE,
     marka TEXT,
     model TEXT,
     yil INTEGER,
@@ -49,8 +48,8 @@ USER_TEMP = {}
 # ================== HELPERS ==================
 
 def extract_listing_id(url: str):
-    match = re.search(r"-([0-9]{6,})", url)
-    return match.group(1) if match else None
+    m = re.search(r"-([0-9]{6,})", url)
+    return m.group(1) if m else None
 
 def parse_basic_from_url(url: str):
     parts = url.split("-")
@@ -63,22 +62,28 @@ def parse_basic_from_url(url: str):
             break
     return marka, model, yil
 
+def normalize_damage(text: str):
+    t = text.lower()
+    if "boya" in t and "değişen" not in t:
+        return "boyasız"
+    if "değişen" in t or "hasar" in t:
+        return "hasarlı"
+    return "bilinmiyor"
+
 def trimmed_mean(values, ratio=0.1):
     if len(values) < 5:
         return sum(values) / len(values)
     values = sorted(values)
     k = int(len(values) * ratio)
-    trimmed = values[k:-k] if k > 0 else values
-    return sum(trimmed) / len(trimmed)
+    return sum(values[k:-k]) / len(values[k:-k])
 
 def standard_deviation(values):
     avg = sum(values) / len(values)
-    variance = sum((x - avg) ** 2 for x in values) / len(values)
-    return math.sqrt(variance)
+    return math.sqrt(sum((x - avg) ** 2 for x in values) / len(values))
 
 def advanced_market_analysis(data):
-    km_min = int(data["km"] * 0.85)
-    km_max = int(data["km"] * 1.15)
+    km_min = int(data["km"] * 0.75)
+    km_max = int(data["km"] * 1.25)
     yil_min = data["yil"] - 1 if data["yil"] else 0
     yil_max = data["yil"] + 1 if data["yil"] else 9999
 
@@ -89,6 +94,7 @@ def advanced_market_analysis(data):
       AND hasar = ?
       AND km BETWEEN ? AND ?
       AND yil BETWEEN ? AND ?
+      AND listing_id != ?
     """, (
         data["marka"],
         data["model"],
@@ -96,52 +102,47 @@ def advanced_market_analysis(data):
         km_min,
         km_max,
         yil_min,
-        yil_max
+        yil_max,
+        data["listing_id"]
     ))
 
     prices = [r[0] for r in cursor.fetchall()]
-
-    if len(prices) < 10:
+    if len(prices) < 5:
         return None
 
     avg = sum(prices) / len(prices)
     std = standard_deviation(prices)
 
-    # outlier temizleme (±2 std)
     filtered = [p for p in prices if avg - 2*std <= p <= avg + 2*std]
-    if len(filtered) < 8:
+    if len(filtered) < 4:
         filtered = prices
 
-    med = median(filtered)
-    tmean = trimmed_mean(filtered)
-    mean = sum(filtered) / len(filtered)
+    ref = int(
+        0.5 * median(filtered) +
+        0.3 * trimmed_mean(filtered) +
+        0.2 * (sum(filtered) / len(filtered))
+    )
 
-    reference_price = (0.5 * med) + (0.3 * tmean) + (0.2 * mean)
-    diff_percent = ((reference_price - data["fiyat"]) / reference_price) * 100
-    std_ratio = (std / reference_price) * 100
+    diff = ((ref - data["fiyat"]) / ref) * 100
+    std_ratio = (std / ref) * 100
 
-    # güven skoru
-    confidence = 50
-    confidence += min(len(filtered), 20) * 1.5
-    confidence -= min(std_ratio, 20)
-    confidence = max(40, min(95, int(confidence)))
+    confidence = max(40, min(95, int(50 + len(filtered)*2 - std_ratio)))
 
     return {
         "count": len(filtered),
-        "reference": int(reference_price),
-        "diff": diff_percent,
+        "reference": ref,
+        "diff": diff,
         "std_ratio": std_ratio,
         "confidence": confidence
     }
 
-# ================== BOT HANDLERS ==================
+# ================== BOT ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Araç Veri Botu\n\n"
+        "🤖 Araç Analiz Botu\n\n"
         "İlan linkini gönder.\n"
-        "Bot senden fiyat, km ve hasar bilgisi isteyecek\n"
-        "ve yeterli veri varsa piyasa analizi yapacak."
+        "Bot senden fiyat, km ve hasar bilgisi isteyecek."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -149,11 +150,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     state = USER_STATE.get(user_id, "idle")
 
-    # -------- LINK --------
+    # LINK
     if state == "idle" and text.startswith("http"):
         listing_id = extract_listing_id(text)
-        marka, model, yil = parse_basic_from_url(text)
+        if not listing_id:
+            await update.message.reply_text("❌ Geçerli ilan ID bulunamadı.")
+            return
 
+        cursor.execute("SELECT 1 FROM listings WHERE listing_id = ?", (listing_id,))
+        if cursor.fetchone():
+            await update.message.reply_text("⚠️ Bu ilan daha önce kaydedilmiş.")
+            return
+
+        marka, model, yil = parse_basic_from_url(text)
         USER_TEMP[user_id] = {
             "source": "sahibinden",
             "listing_id": listing_id,
@@ -161,12 +170,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "model": model,
             "yil": yil,
         }
-
         USER_STATE[user_id] = "await_price"
         await update.message.reply_text("📌 Fiyatı (TL) yaz:")
         return
 
-    # -------- FİYAT --------
+    # FİYAT
     if state == "await_price":
         if not text.isdigit():
             await update.message.reply_text("❌ Sadece rakam gir.")
@@ -176,20 +184,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📌 Km bilgisini yaz:")
         return
 
-    # -------- KM --------
+    # KM
     if state == "await_km":
         if not text.isdigit():
             await update.message.reply_text("❌ Sadece rakam gir.")
             return
         USER_TEMP[user_id]["km"] = int(text)
         USER_STATE[user_id] = "await_damage"
-        await update.message.reply_text("📌 Hasar durumu? (Boyasız / Değişen var / Bilmiyorum)")
+        await update.message.reply_text("📌 Hasar durumu?")
         return
 
-    # -------- HASAR + ANALİZ --------
+    # HASAR + ANALİZ
     if state == "await_damage":
-        USER_TEMP[user_id]["hasar"] = text
         data = USER_TEMP[user_id]
+        data["hasar"] = normalize_damage(text)
 
         cursor.execute("""
         INSERT INTO listings (
@@ -197,14 +205,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             km, fiyat, hasar, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            data["source"],
-            data["listing_id"],
-            data["marka"],
-            data["model"],
-            data["yil"],
-            data["km"],
-            data["fiyat"],
-            data["hasar"],
+            data["source"], data["listing_id"], data["marka"], data["model"],
+            data["yil"], data["km"], data["fiyat"], data["hasar"],
             datetime.now().isoformat()
         ))
         conn.commit()
@@ -216,8 +218,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not analysis:
             await update.message.reply_text(
-                "✅ İlan kaydedildi.\n"
-                "🔍 Analiz için yeterli veri yok (min 10)."
+                "✅ Kaydedildi.\n"
+                "🔍 Analiz için yeterli benzer ilan yok."
             )
             return
 
@@ -231,22 +233,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             decision = "❌ PİYASA FİYATI"
 
-        if std_ratio > 15:
-            risk = "⚠️ Piyasa verisi dağınık"
-        elif std_ratio > 8:
-            risk = "ℹ️ Piyasa normal dalgalı"
-        else:
-            risk = "✅ Piyasa stabil"
-
         await update.message.reply_text(
-            f"📊 Gelişmiş Piyasa Analizi\n\n"
+            f"📊 Piyasa Analizi\n\n"
             f"Benzer ilan: {analysis['count']}\n"
             f"Referans fiyat: {analysis['reference']:,} TL\n"
             f"Bu ilan: {data['fiyat']:,} TL\n"
             f"Fark: %{diff:.1f}\n\n"
             f"{decision}\n"
-            f"{risk}\n\n"
-            f"🔐 Analiz Güveni: %{analysis['confidence']}"
+            f"🔐 Güven: %{analysis['confidence']}"
         )
         return
 
