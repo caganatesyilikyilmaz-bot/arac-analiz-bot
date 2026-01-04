@@ -110,6 +110,8 @@ def advanced_market_analysis(data):
     ))
 
     prices = [r[0] for r in cursor.fetchall()]
+
+    # 🔴 MİNİMUM 5 ARAÇ ŞARTI
     if len(prices) < 5:
         return None
 
@@ -156,7 +158,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     state = USER_STATE.get(user_id, "idle")
 
-    # LINK
     if state == "idle" and text.startswith("http"):
         listing_id = extract_listing_id(text)
         if not listing_id:
@@ -180,7 +181,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📌 Fiyatı (TL) yaz:")
         return
 
-    # FİYAT
     if state == "await_price":
         if not text.isdigit():
             await update.message.reply_text("❌ Sadece rakam gir.")
@@ -190,7 +190,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📌 Km bilgisini yaz:")
         return
 
-    # KM
     if state == "await_km":
         if not text.isdigit():
             await update.message.reply_text("❌ Sadece rakam gir.")
@@ -200,7 +199,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📌 Hasar durumu?")
         return
 
-    # HASAR + ANALİZ
     if state == "await_damage":
         data = USER_TEMP[user_id]
         data["hasar"] = normalize_damage(text)
@@ -234,7 +232,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not analysis:
             await update.message.reply_text(
                 "✅ Kaydedildi.\n"
-                "🔍 Analiz için yeterli ve sağlıklı veri yok."
+                "🔍 Analiz için yeterli benzer ilan yok (min 5)."
             )
             return
 
@@ -271,3 +269,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
