@@ -111,7 +111,6 @@ def advanced_market_analysis(data):
 
     prices = [r[0] for r in cursor.fetchall()]
 
-    # 🔴 MİNİMUM 5 ARAÇ ŞARTI
     if len(prices) < 5:
         return None
 
@@ -133,7 +132,6 @@ def advanced_market_analysis(data):
 
     diff = ((ref - data["fiyat"]) / ref) * 100
     std_ratio = (std / ref) * 100 if ref > 0 else 0
-
     confidence = int(max(40, min(95, 50 + len(filtered)*2 - std_ratio)))
 
     return {
@@ -143,6 +141,30 @@ def advanced_market_analysis(data):
         "std_ratio": std_ratio,
         "confidence": confidence
     }
+
+# ================== ADMIN DB COMMAND ==================
+
+async def db_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT COUNT(*) FROM listings")
+    total = cursor.fetchone()[0]
+
+    cursor.execute("""
+        SELECT marka, model, yil, km, fiyat, hasar
+        FROM listings
+        ORDER BY id DESC
+        LIMIT 5
+    """)
+    rows = cursor.fetchall()
+
+    if total == 0:
+        await update.message.reply_text("📦 Veritabanı boş.")
+        return
+
+    msg = f"📦 Toplam kayıt: {total}\n\n📄 Son 5 kayıt:\n"
+    for r in rows:
+        msg += f"- {r[0]} {r[1]} {r[2]} | {r[3]} km | {r[4]} TL | {r[5]}\n"
+
+    await update.message.reply_text(msg)
 
 # ================== BOT ==================
 
@@ -264,9 +286,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("db", db_info))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
